@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-bg text-text antialiased;
+    font-family: 'Fira Sans', sans-serif;
+  }
+  
+  /* Minimal glow utilities as per UI/UX Pro Max */
+  .glow-text {
+    text-shadow: 0 0 10px rgba(74, 93, 35, 0.3);
+  }
+  
+  .glow-green {
+    text-shadow: 0 0 10px rgba(204, 213, 174, 0.8);
+    box-shadow: 0 0 15px rgba(204, 213, 174, 0.5);
+  }
+}
+
+/* Ensure canvas doesn't blur */
+canvas {
+  image-rendering: pixelated;
+}
