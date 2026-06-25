@@ -62,7 +62,7 @@ export function BotProvider({ children }) {
   // Linear mapping: ppm = (rawValue / 4095) * 2000 + 400
   const rawWsData = wsData ? {
     co2_ppm: Math.round((wsData.co2 / 4095) * 2000 + 400),
-    thermal: wsData.thermal,
+    thermal: wsData.thermal ? wsData.thermal.map(v => Math.max(15, Math.min(45, v))) : null,
     timestamp: wsData.timestamp || Date.now(),
     battery_mv: wsData.battery_mv || 3700,
     gps: wsData.gps

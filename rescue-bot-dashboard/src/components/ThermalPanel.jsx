@@ -64,17 +64,20 @@ export function ThermalPanel() {
       thermal = fallbackThermal;
     }
     
+    // Clamp every pixel value: temp = Math.max(15, Math.min(45, temp))
+    const clampedThermal = thermal.map(v => Math.max(15, Math.min(45, v)));
+    
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d', { alpha: false });
     
     let animationFrameId;
 
     const render = () => {
-      // 1. Dynamic min/max calculation for frame auto-scaling
+      // 1. Dynamic min/max calculation for frame auto-scaling (from clamped values)
       let minT = Infinity;
       let maxT = -Infinity;
       for (let i = 0; i < len; i++) {
-        const val = thermal[i];
+        const val = clampedThermal[i];
         if (val < minT) minT = val;
         if (val > maxT) maxT = val;
       }
@@ -93,10 +96,10 @@ export function ThermalPanel() {
           const r = Math.max(0, Math.min(rows - 1, (y / 320) * rows));
           const c = Math.max(0, Math.min(cols - 1, (x / 320) * cols));
           
-          const interp = bilinearInterpolate(thermal, rows, cols, r, c);
+          const interp = bilinearInterpolate(clampedThermal, rows, cols, r, c);
           
-          // Normalize to 0-1 for dynamic colormap
-          const norm = (interp - minT) / (maxT - minT);
+          // Normalize using fixed range: normalized = (temp - 15) / (45 - 15)
+          const norm = (interp - 15) / (45 - 15);
           const color = tempToColor(norm);
           
           const idx = (y * 320 + x) * 4;
@@ -110,7 +113,7 @@ export function ThermalPanel() {
       ctx.putImageData(imgData, 0, 0);
 
       // 3. Blob Detection & Bounding Box Overlays
-      const blobResult = blobDetect(thermal, thresholds.temp_celsius, thresholds.min_blob_area);
+      const blobResult = blobDetect(clampedThermal, thresholds.temp_celsius, thresholds.min_blob_area);
       
       if (blobResult.detected && blobResult.boundingBox) {
         const bb = blobResult.boundingBox;
@@ -170,14 +173,14 @@ export function ThermalPanel() {
           
           {/* HTML-based Scale Bar */}
           <div className="flex flex-col items-center h-[320px] justify-between py-2 text-[10px] font-mono text-text font-bold shrink-0">
-            <span>{stats.max.toFixed(1)}°C</span>
+            <span>45.0°C</span>
             <div 
               className="w-3.5 flex-grow my-2 rounded border border-secondary/60 shadow-inner" 
               style={{
                 background: 'linear-gradient(to top, rgb(0,0,140), rgb(0,255,255), rgb(0,255,0), rgb(255,255,0), rgb(255,0,0))'
               }} 
             />
-            <span>{stats.min.toFixed(1)}°C</span>
+            <span>15.0°C</span>
           </div>
         </div>
         
