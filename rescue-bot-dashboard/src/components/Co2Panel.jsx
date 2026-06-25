@@ -45,7 +45,7 @@ export function Co2Panel() {
         </div>
       </div>
 
-      <div className="flex-grow min-h-[160px] w-full mt-2">
+      <div style={{ minWidth: 0, minHeight: 0, width: '100%', height: 300 }} className="flex-grow mt-2">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={dataHistory} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1E293B" vertical={false} />

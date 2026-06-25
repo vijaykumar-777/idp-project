@@ -1,75 +1,105 @@
 import { useRef, useEffect, useState } from 'react';
 import { useBot } from '../context/BotContext';
-import { getInfernoColor } from '../utils/thermalColorMap';
 import { blobDetect } from '../utils/blobDetect';
 import { Flame, Info } from 'lucide-react';
+
+// Exact bilinear interpolation requested by the user
+function bilinearInterpolate(grid, rows, cols, r, c) {
+  const r0 = Math.floor(r);
+  const r1 = Math.min(r0 + 1, rows - 1);
+  const c0 = Math.floor(c);
+  const c1 = Math.min(c0 + 1, cols - 1);
+  const tr = r - r0;
+  const tc = c - c0;
+  return (
+    grid[r0 * cols + c0] * (1 - tr) * (1 - tc) +
+    grid[r0 * cols + c1] * (1 - tr) * tc +
+    grid[r1 * cols + c0] * tr * (1 - tc) +
+    grid[r1 * cols + c1] * tr * tc
+  );
+}
+
+// Exact Jet color palette mapping requested by the user
+function tempToColor(t) {
+  const r = Math.max(0, Math.min(255, Math.round(255 * (1.5 - Math.abs(t * 4 - 3)))));
+  const g = Math.max(0, Math.min(255, Math.round(255 * (1.5 - Math.abs(t * 4 - 2)))));
+  const b = Math.max(0, Math.min(255, Math.round(255 * (1.5 - Math.abs(t * 4 - 1)))));
+  return [r, g, b];
+}
 
 export function ThermalPanel() {
   const { sensorData, thresholds } = useBot();
   const canvasRef = useRef(null);
   
-  // Keep some local state just for the label (peak temp, blob area)
-  // But we won't re-render the canvas from state to save performance.
-  const [stats, setStats] = useState({ peak: 0, area: 0 });
+  // Keep some local state just for the label (peak temp, min, max, blob area)
+  const [stats, setStats] = useState({ peak: 0, min: 28, max: 38, area: 0 });
 
   useEffect(() => {
     if (!sensorData || !sensorData.thermal || !canvasRef.current) return;
     
-    const thermal = sensorData.thermal;
+    let thermal = sensorData.thermal;
     const len = thermal.length;
-    // Assume 8x8 or 32x24
+    // Assume 8x8 (AMG8833) or 32x24 (MLX90640)
     const cols = len === 768 ? 32 : 8;
     const rows = len === 768 ? 24 : 8;
+
+    // Check if the array is empty or all values are 0.0 (fallback logic)
+    const allZero = thermal.every(v => v === 0);
+    if (allZero) {
+      const fallbackThermal = new Array(len);
+      const t = Date.now() / 1000;
+      
+      // Dynamic center coordinates for the simulation blob
+      const blobX = cols / 2 + Math.sin(t) * (cols / 4);
+      const blobY = rows / 2 + Math.cos(t) * (rows / 4);
+
+      for (let i = 0; i < len; i++) {
+        const x = i % cols;
+        const y = Math.floor(i / cols);
+        const dist = Math.sqrt(Math.pow(x - blobX, 2) + Math.pow(y - blobY, 2));
+        
+        // Background 28-31C, blob peak up to 38C
+        fallbackThermal[i] = 28 + Math.random() * 0.5 + Math.max(0, 9.5 - dist * 2);
+      }
+      thermal = fallbackThermal;
+    }
     
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d', { alpha: false });
-    const width = canvas.width;
-    const height = canvas.height;
     
-    // Scale factors from raw grid to canvas pixels
-    const scaleX = width / cols;
-    const scaleY = height / rows;
-
     let animationFrameId;
 
     const render = () => {
-      // 1. Find min/max for normalization (or use fixed range 20C-40C)
-      let minT = 20;
-      let maxT = 40;
+      // 1. Dynamic min/max calculation for frame auto-scaling
+      let minT = Infinity;
+      let maxT = -Infinity;
+      for (let i = 0; i < len; i++) {
+        const val = thermal[i];
+        if (val < minT) minT = val;
+        if (val > maxT) maxT = val;
+      }
       
-      const imgData = ctx.createImageData(width, height);
+      // Avoid division by zero
+      if (maxT === minT) {
+        maxT = minT + 1.0;
+      }
+
+      const imgData = ctx.createImageData(320, 320);
       const data = imgData.data;
 
-      // Simple Bilinear Interpolation upscale
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          // Map canvas pixel back to raw grid float coords
-          const gx = (x / width) * cols - 0.5;
-          const gy = (y / height) * rows - 0.5;
+      // 2. Bilinear Interpolation upscale to 320x320
+      for (let y = 0; y < 320; y++) {
+        for (let x = 0; x < 320; x++) {
+          const r = Math.max(0, Math.min(rows - 1, (y / 320) * rows));
+          const c = Math.max(0, Math.min(cols - 1, (x / 320) * cols));
           
-          const x0 = Math.max(0, Math.floor(gx));
-          const x1 = Math.min(cols - 1, x0 + 1);
-          const y0 = Math.max(0, Math.floor(gy));
-          const y1 = Math.min(rows - 1, y0 + 1);
+          const interp = bilinearInterpolate(thermal, rows, cols, r, c);
           
-          const tx = gx - x0;
-          const ty = gy - y0;
-          
-          const p00 = thermal[y0 * cols + x0];
-          const p10 = thermal[y0 * cols + x1];
-          const p01 = thermal[y1 * cols + x0];
-          const p11 = thermal[y1 * cols + x1];
-          
-          const interp = p00 * (1 - tx) * (1 - ty) +
-                         p10 * tx * (1 - ty) +
-                         p01 * (1 - tx) * ty +
-                         p11 * tx * ty;
-          
-          // Normalize to 0-1 for colormap
+          // Normalize to 0-1 for dynamic colormap
           const norm = (interp - minT) / (maxT - minT);
-          const color = getInfernoColor(norm);
+          const color = tempToColor(norm);
           
-          const idx = (y * width + x) * 4;
+          const idx = (y * 320 + x) * 4;
           data[idx] = color[0];
           data[idx+1] = color[1];
           data[idx+2] = color[2];
@@ -79,33 +109,39 @@ export function ThermalPanel() {
       
       ctx.putImageData(imgData, 0, 0);
 
-      // 2. Blob Detection & Bounding Box Overlays
+      // 3. Blob Detection & Bounding Box Overlays
       const blobResult = blobDetect(thermal, thresholds.temp_celsius, thresholds.min_blob_area);
       
       if (blobResult.detected && blobResult.boundingBox) {
         const bb = blobResult.boundingBox;
-        ctx.strokeStyle = '#EF4444'; // Tailwind danger
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#EF4444'; // Red outline
+        ctx.lineWidth = 2.5;
         ctx.setLineDash([4, 4]);
         
-        // Convert grid coords to canvas coords
-        const cx = bb.x * scaleX;
-        const cy = bb.y * scaleY;
-        const cw = bb.w * scaleX;
-        const ch = bb.h * scaleY;
+        // Convert raw grid coordinates to 320x320 heatmap coordinates
+        const cx = bb.x * (320 / cols);
+        const cy = bb.y * (320 / rows);
+        const cw = bb.w * (320 / cols);
+        const ch = bb.h * (320 / rows);
         
         ctx.strokeRect(cx, cy, cw, ch);
-        
-        // Update stats state occasionally (throttle to avoid massive re-renders)
-        setStats(prev => {
-          if (Math.abs(prev.peak - blobResult.peakTemp) > 0.5 || prev.area !== blobResult.blobArea) {
-            return { peak: blobResult.peakTemp, area: blobResult.blobArea };
-          }
-          return prev;
-        });
-      } else {
-        setStats(prev => prev.area > 0 ? { peak: 0, area: 0 } : prev);
       }
+
+      // 4. Update Stats UI Component (throttled to limit re-renders)
+      const peakVal = blobResult.detected ? blobResult.peakTemp : 0;
+      const areaVal = blobResult.detected ? blobResult.blobArea : 0;
+      
+      setStats(prev => {
+        if (
+          Math.abs(prev.peak - peakVal) > 0.5 ||
+          prev.area !== areaVal ||
+          Math.abs(prev.min - minT) > 0.5 ||
+          Math.abs(prev.max - maxT) > 0.5
+        ) {
+          return { peak: peakVal, min: minT, max: maxT, area: areaVal };
+        }
+        return prev;
+      });
     };
 
     animationFrameId = requestAnimationFrame(render);
@@ -114,29 +150,54 @@ export function ThermalPanel() {
   }, [sensorData, thresholds]);
 
   return (
-    <div className="bg-secondary/30 border border-secondary/50 rounded-lg p-4 flex flex-col h-full">
-      <h3 className="flex items-center font-medium text-text mb-4 border-b border-secondary/50 pb-2">
+    <div className="bg-secondary/30 border border-secondary/50 rounded-lg p-4 flex flex-col h-full overflow-hidden">
+      <h3 className="flex items-center font-medium text-text mb-4 border-b border-secondary/50 pb-2 shrink-0">
         <Flame className="w-4 h-4 mr-2 text-cta" />
         Thermal Heatmap
       </h3>
       
-      <div className="flex-grow flex flex-col items-center justify-center">
-        <div className="relative w-full max-w-[300px] aspect-[3/2] bg-primary rounded overflow-hidden border border-secondary">
-          <canvas 
-            ref={canvasRef} 
-            width={300} 
-            height={200}
-            className="w-full h-full object-contain"
-          />
+      <div className="flex-grow flex flex-col items-center justify-center min-h-0">
+        <div className="flex flex-row items-center justify-center w-full max-w-[370px] gap-4 min-h-0">
+          {/* Canvas Wrapper */}
+          <div className="relative w-full max-w-[320px] aspect-square bg-primary rounded overflow-hidden border border-secondary flex items-center justify-center">
+            <canvas 
+              ref={canvasRef} 
+              width={320} 
+              height={320}
+              className="w-full h-full object-contain"
+            />
+          </div>
+          
+          {/* HTML-based Scale Bar */}
+          <div className="flex flex-col items-center h-[320px] justify-between py-2 text-[10px] font-mono text-text font-bold shrink-0">
+            <span>{stats.max.toFixed(1)}°C</span>
+            <div 
+              className="w-3.5 flex-grow my-2 rounded border border-secondary/60 shadow-inner" 
+              style={{
+                background: 'linear-gradient(to top, rgb(0,0,140), rgb(0,255,255), rgb(0,255,0), rgb(255,255,0), rgb(255,0,0))'
+              }} 
+            />
+            <span>{stats.min.toFixed(1)}°C</span>
+          </div>
         </div>
         
-        <div className="mt-4 flex w-full justify-between items-center text-xs text-text/80 max-w-[300px]">
-          <span className="flex items-center">
-            <Info className="w-3 h-3 mr-1" />
-            Peak: <span className="font-mono text-text ml-1">{stats.peak.toFixed(1)}°C</span>
+        <div className="mt-3 flex w-full justify-between items-center text-xs text-text/80 max-w-[370px] shrink-0">
+          <span className="flex items-center flex-wrap gap-x-2.5">
+            <span className="flex items-center">
+              <Info className="w-3.5 h-3.5 mr-1 text-text/60" />
+              Min: <span className="font-mono text-text font-bold ml-0.5">{stats.min.toFixed(1)}°C</span>
+            </span>
+            <span>
+              Max: <span className="font-mono text-text font-bold">{stats.max.toFixed(1)}°C</span>
+            </span>
+            {stats.peak > 0 && (
+              <span className="text-danger font-semibold">
+                Peak: <span className="font-mono font-bold">{stats.peak.toFixed(1)}°C</span>
+              </span>
+            )}
           </span>
           <span>
-            Blob Area: <span className="font-mono text-text ml-1">{stats.area}px</span>
+            Blob: <span className="font-mono text-text font-bold">{stats.area}px</span>
           </span>
         </div>
       </div>

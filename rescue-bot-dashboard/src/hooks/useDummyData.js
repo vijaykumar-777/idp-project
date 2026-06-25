@@ -19,18 +19,16 @@ export function useDummyData(enabled = false) {
       const baseCo2 = 400;
       const co2 = Math.floor(baseCo2 + Math.max(0, Math.sin(t * 0.5) * 800) + (Math.random() * 50));
       
-      // Simulate 8x8 thermal array
+      // Simulate 8x8 thermal array (realistic 28-38C range, center hot blob)
       const thermal = Array.from({ length: 64 }, (_, i) => {
-        const x = i % 8;
-        const y = Math.floor(i / 8);
-        
-        // Moving hot blob
-        const blobX = 4 + Math.sin(t) * 2;
-        const blobY = 4 + Math.cos(t) * 2;
-        const dist = Math.sqrt(Math.pow(x - blobX, 2) + Math.pow(y - blobY, 2));
-        
-        // Background temp ~25, blob peak ~36
-        return 25 + Math.random() * 2 + Math.max(0, 10 - dist * 3);
+        const isCenter = [27, 28, 35, 36].includes(i);
+        if (isCenter) {
+          // Hot center blob: 35-38C
+          return 35 + Math.random() * 3;
+        } else {
+          // Cool/warm background: 28-31C
+          return 28 + Math.random() * 3;
+        }
       });
 
       // Simulate GPS data

@@ -10,38 +10,65 @@ const BotContext = createContext(null);
 // Audio context for beep
 let audioCtx = null;
 function playBeep() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  
-  // Play 3 short beeps
-  for (let i = 0; i < 3; i++) {
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
     
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, audioCtx.currentTime + i * 0.4);
-    
-    gain.gain.setValueAtTime(0, audioCtx.currentTime + i * 0.4);
-    gain.gain.linearRampToValueAtTime(1, audioCtx.currentTime + i * 0.4 + 0.05);
-    gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + i * 0.4 + 0.3);
-    
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    
-    osc.start(audioCtx.currentTime + i * 0.4);
-    osc.stop(audioCtx.currentTime + i * 0.4 + 0.3);
+    // Play 3 short beeps
+    for (let i = 0; i < 3; i++) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, audioCtx.currentTime + i * 0.4);
+      
+      gain.gain.setValueAtTime(0, audioCtx.currentTime + i * 0.4);
+      gain.gain.linearRampToValueAtTime(1, audioCtx.currentTime + i * 0.4 + 0.05);
+      gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + i * 0.4 + 0.3);
+      
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      
+      osc.start(audioCtx.currentTime + i * 0.4);
+      osc.stop(audioCtx.currentTime + i * 0.4 + 0.3);
+    }
+  } catch (err) {
+    console.warn("Audio playback blocked or failed:", err);
   }
 }
 
 export function BotProvider({ children }) {
-  // Use VITE_BOT_IP if defined, else local mock logic
-  const botIp = import.meta.env.VITE_BOT_IP;
-  const wsUrl = botIp ? `ws://${botIp}:81/ws` : null;
-  const useDummy = !botIp; // fallback to dummy data if no IP provided
+  // Load WebSocket URL from localStorage or fallback to environment variable
+  const [wsUrl, setWsUrl] = useState(() => {
+    const saved = localStorage.getItem('rescuebot_ws_url');
+    if (saved) return saved;
+    const botIp = import.meta.env.VITE_BOT_IP;
+    return botIp ? `ws://${botIp}:81` : '';
+  });
 
-  const { sensorData: wsData, wsStatus, sendCommand, packetRate } = useWebSocket(wsUrl);
+  // Save to localStorage whenever the URL changes
+  useEffect(() => {
+    localStorage.setItem('rescuebot_ws_url', wsUrl);
+  }, [wsUrl]);
+
+  const useDummy = !wsUrl; // fallback to dummy mode if URL is blank
+
+  const { sensorData: wsData, wsStatus, sendCommand, packetRate } = useWebSocket(wsUrl || null);
   const dummyData = useDummyData(useDummy);
   
-  const sensorData = useDummy ? dummyData : wsData;
+  // Format raw incoming websocket data to keep compatibility with context consumers
+  // Linear mapping: ppm = (rawValue / 4095) * 2000 + 400
+  const rawWsData = wsData ? {
+    co2_ppm: Math.round((wsData.co2 / 4095) * 2000 + 400),
+    thermal: wsData.thermal,
+    timestamp: wsData.timestamp || Date.now(),
+    battery_mv: wsData.battery_mv || 3700,
+    gps: wsData.gps
+  } : null;
+
+  const sensorData = useDummy ? dummyData : rawWsData;
   const currentWsStatus = useDummy ? 'simulated' : wsStatus;
   const currentPacketRate = useDummy ? 10 : packetRate;
 
@@ -122,7 +149,9 @@ export function BotProvider({ children }) {
     activeAlert,
     dismissAlert,
     logs,
-    clearLogs
+    clearLogs,
+    wsUrl,
+    setWsUrl
   };
 
   return (
